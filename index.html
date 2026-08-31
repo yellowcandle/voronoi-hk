@@ -6,9 +6,13 @@
 <style>
   html,body{margin:0;padding:0;background:#dbe6f2;overflow:hidden;height:100%;
     font-family:"PingFang HK","PingFang TC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;}
-  #app{position:relative;width:1600px;height:1136px;}
-  #map{position:absolute;inset:0;width:1600px;height:1136px;cursor:crosshair;}
-  #ov{position:absolute;inset:0;width:1600px;height:1136px;pointer-events:none;}
+  #wrap{position:relative;width:100vw;height:100vh;height:100dvh;}
+  #app{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:min(100vw,calc(100dvh*1.40845),1600px);aspect-ratio:1600/1136;
+    touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;}
+  #map,#ov{position:absolute;inset:0;width:100%;height:100%;}
+  #map{cursor:crosshair;}
+  #ov{pointer-events:none;}
   #ov circle[data-i]{pointer-events:all;cursor:grab;}
   .card{position:absolute;background:rgba(255,255,255,.94);border-radius:10px;
     box-shadow:0 2px 14px rgba(30,40,60,.18);padding:10px 14px;font-size:12.5px;color:#2b2b2b;}
@@ -17,7 +21,12 @@
   #title p{margin:2px 0;line-height:1.5;}
   #title .sub{font-weight:600;}
   #controls{top:14px;right:14px;width:236px;}
-  #controls h2{margin:0 0 6px;font-size:13px;color:#16324a;}
+  #controls summary{margin:0 0 6px;font-size:13px;font-weight:700;color:#16324a;
+    cursor:pointer;list-style:none;user-select:none;}
+  #controls summary::-webkit-details-marker{display:none;}
+  #ctl[open] summary{margin-bottom:6px;}
+  #ctl[open] summary::after{content:' ▴';}
+  #ctl:not([open]) summary::after{content:' ▾';}
   #controls label{display:flex;align-items:center;gap:6px;margin:3px 0;cursor:pointer;}
   #controls input[type=checkbox]{accent-color:#3d5a80;}
   #controls .row{display:flex;align-items:center;gap:6px;margin:4px 0;}
@@ -33,23 +42,43 @@
   #legend{right:14px;bottom:14px;width:250px;line-height:1.9;}
   .sw{margin-right:7px;}
   #legend .note{margin-top:4px;font-size:11px;color:#7a7a7a;border-top:1px solid #e5e5e5;padding-top:4px;}
-  .hint{font-size:11px;color:#8a8a8a;}
+
+  @media (max-width:760px){
+    .card{padding:7px 10px;font-size:11.5px;border-radius:8px;}
+    #title{top:8px;left:8px;right:8px;max-width:none;}
+    #title h1{font-size:15px;}
+    #title p{font-size:11px;line-height:1.4;}
+    #title .hint{display:none;}
+    #controls{top:auto;right:8px;bottom:8px;width:auto;max-width:48vw;}
+    #controls label{font-size:11px;}
+    #controls select{font-size:11px;}
+    #controls button{font-size:11px;padding:2px 6px;}
+    #pairout{font-size:11px;}
+    #readout{left:8px;right:8px;bottom:78px;min-width:0;}
+    #readout .big{font-size:13px;}
+    #legend{right:auto;left:8px;bottom:8px;width:auto;max-width:48vw;font-size:10px;line-height:1.6;}
+    #legend div{white-space:nowrap;}
+    #legend .note{display:none;}
+  }
 </style>
 </head>
 <body>
-<div id="app">
-  <canvas id="map" width="3200" height="2272"></canvas>
-  <svg id="ov" width="1600" height="1136"></svg>
+<div id="wrap">
+  <div id="app">
+    <canvas id="map" width="3200" height="2272"></canvas>
+    <svg id="ov" width="1600" height="1136"></svg>
+  </div>
 
   <div id="title" class="card">
     <h1>香港地方名 Voronoi</h1>
     <p class="sub">企喺邊，就屬邊個 —— 按直線距離最近嘅地方名，唔靠塘尾道。</p>
     <p>大角咀 vs 旺角（芒角）示範：每一點都歸入最近嘅地名格。</p>
-    <p class="hint">滾輪縮放 · 拖曳地圖平移 · 拖曳圓點可改地名位置 · 懸停睇最近邊區</p>
+    <p class="hint">滾輪／雙指縮放 · 拖曳平移 · 點擊或懸停睇最近邊區 · 拖曳圓點改位置</p>
   </div>
 
   <div id="controls" class="card">
-    <h2>設定</h2>
+    <details id="ctl" open>
+    <summary>設定</summary>
     <div class="row">
       <span>種子：</span>
       <label><input type="radio" name="mode" value="places" checked>地方名</label>
@@ -65,6 +94,7 @@
     <button id="btn-all">睇全港</button>
     <button id="btn-reset">重設</button>
     <div id="pairout"></div>
+    </details>
   </div>
 
   <div id="readout" class="card">
@@ -96,6 +126,9 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   const canvas = document.getElementById('map');
   const ctx = canvas.getContext('2d');
   const svg = document.getElementById('ov');
+
+  const DPR = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = W * DPR; canvas.height = H * DPR;
 
   let mode = 'places';
   let seeds = D.places;
@@ -199,7 +232,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   const PAL_OFF = mode === 'places' ? 0 : 10;
 
   function render() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = DPR;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = WATER;
     ctx.fillRect(0, 0, W, H);
@@ -361,27 +394,68 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     view.cy = my - (sy - H / 2) / view.k;
     draw();
   }, { passive: false });
+  const pointers = new Map();
+  let pinch0 = null, downPos = null;
   evt(canvas, 'pointerdown', (e) => {
-    const [sx, sy] = norm(e);
-    panning = { sx, sy, cx: view.cx, cy: view.cy };
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    const p = norm(e);
+    pointers.set(e.pointerId, p);
+    if (e.pointerType === 'touch') downPos = p;
+    if (pointers.size === 1) {
+      panning = { sx: p[0], sy: p[1], cx: view.cx, cy: view.cy };
+    } else if (pointers.size === 2) {
+      panning = null;
+      const [a, b] = [...pointers.values()];
+      pinch0 = { dist: Math.hypot(a[0] - b[0], a[1] - b[1]), cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, k: view.k, cx0: view.cx, cy0: view.cy };
+    }
   });
   evt(canvas, 'pointermove', (e) => {
-    const [sx, sy] = norm(e);
-    if (panning) {
-      view.cx = panning.cx - (sx - panning.sx) / view.k;
-      view.cy = panning.cy - (sy - panning.sy) / view.k;
+    const p = norm(e);
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+    if (pointers.size >= 2 && pinch0) {
+      const [a, b] = [...pointers.values()];
+      const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
+      const nk = Math.max(KMIN, Math.min(KMAX, pinch0.k * (dist / (pinch0.dist || 1))));
+      const mx = (pinch0.cx - W / 2) / pinch0.k + pinch0.cx0;
+      const my = (pinch0.cy - H / 2) / pinch0.k + pinch0.cy0;
+      view.k = nk;
+      view.cx = mx - (cx - W / 2) / nk;
+      view.cy = my - (cy - H / 2) / nk;
       draw();
-    } else onMove(sx, sy);
+      return;
+    }
+    if (panning) {
+      view.cx = panning.cx - (p[0] - panning.sx) / view.k;
+      view.cy = panning.cy - (p[1] - panning.sy) / view.k;
+      draw();
+      return;
+    }
+    onMove(p[0], p[1]);
   });
-  evt(canvas, 'pointerup', (e) => { panning = null; });
+  const endPointer = (e) => {
+    const p = norm(e);
+    const wasTouch = e.pointerType === 'touch';
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch0 = null;
+    if (pointers.size === 0) {
+      panning = null;
+      if (wasTouch && downPos) {
+        const dx = p[0] - downPos[0], dy = p[1] - downPos[1];
+        if (dx * dx + dy * dy < 100) onMove(p[0], p[1]);
+      }
+      downPos = null;
+    }
+  };
+  evt(canvas, 'pointerup', endPointer);
+  evt(canvas, 'pointercancel', endPointer);
   // seed dragging via svg
   evt(svg, 'pointerdown', (e) => {
     const c = e.target.closest('circle[data-i]');
     if (!c || mode !== 'places') return;
     e.preventDefault();
     dragging = +c.dataset.i;
-    svg.setPointerCapture(e.pointerId);
+    try { svg.setPointerCapture(e.pointerId); } catch (err) {}
   });
   evt(svg, 'pointermove', (e) => {
     if (dragging === null) return;
@@ -429,6 +503,11 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   });
 
   // ---- init ----
+  const ctl = document.getElementById('ctl');
+  const syncCtl = () => { if (window.innerWidth <= 760) ctl.removeAttribute('open'); else ctl.setAttribute('open', ''); };
+  syncCtl();
+  window.addEventListener('resize', syncCtl);
+  if (navigator.maxTouchPoints > 0) document.getElementById('ro-nearest').textContent = '點一下地圖，睇最近邊區';
   setSeeds(D.places);
   if (new URLSearchParams(location.search).get('view') === 'pair') flyPair();
   render();
