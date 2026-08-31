@@ -87,7 +87,6 @@
     <label><input type="checkbox" id="t-cells" checked>Voronoi 格</label>
     <label><input type="checkbox" id="t-labels" checked>地名標籤</label>
     <label><input type="checkbox" id="t-roads" checked>主要道路</label>
-    <label><input type="checkbox" id="t-official" checked>官方分界（塘尾道）</label>
     <div class="row"><span>分界 A</span><select id="pairA"></select></div>
     <div class="row"><span>分界 B</span><select id="pairB"></select></div>
     <button id="btn-pair">去到大角咀/旺角</button>
@@ -104,7 +103,6 @@
 
   <div id="legend" class="card">
     <div><span class="sw" style="color:#c3427c">━</span>Voronoi 分界（A ↔ B 共享邊界）</div>
-    <div><span class="sw" style="color:#c0392b">╌</span>官方分界（塘尾道）</div>
     <div><span class="sw" style="color:#3d5a80">●</span>A 種子 · <span style="color:#d1495b">●</span>B 種子</div>
     <div class="note">地圖數據：OpenStreetMap © ODbL<br>距離 = 平面直線距離（Voronoi 定義）</div>
   </div>
@@ -122,7 +120,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   const W = D.W, H = D.H, S = D.scale;
   const WATER = '#c9ddec', LAND = '#f5f2e9', COAST = '#9db8d2';
   const ROAD_HWY = '#b0a68c', ROAD_PRY = '#c4baa3', ROAD_KEY = '#8a8070';
-  const COL_A = '#3d5a80', COL_B = '#d1495b', COL_EDGE = '#c3427c', COL_OFF = '#c0392b';
+  const COL_A = '#3d5a80', COL_B = '#d1495b', COL_EDGE = '#c3427c';
   const canvas = document.getElementById('map');
   const ctx = canvas.getContext('2d');
   const svg = document.getElementById('ov');
@@ -178,11 +176,6 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   const roadKey = pathFrom(D.keystreets);
   const coastPath = pathFrom(D.coast.concat(D.islands));
 
-  // tong mi road polyline (official boundary), in map px
-  const tongmi = D.keystreets.filter(r => r.n.split(' ')[0] === '塘尾道');
-  const tongmiSegs = [];
-  for (const r of tongmi) for (let i = 0; i < r.pts.length - 1; i++) tongmiSegs.push([r.pts[i], r.pts[i + 1]]);
-
   // ---- seeds / delaunay ----
   function setSeeds(list, resetPair) {
     seeds = list;
@@ -225,12 +218,6 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     if (common.length < 2) return null;
     return [common[0], common[1]];
   }
-  function segDist(px, py, ax, ay, bx, by) {
-    const dx = bx - ax, dy = by - ay;
-    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
-    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-  }
-
   // ---- render ----
   function draw() { render(); }
   const PAL_OFF = mode === 'places' ? 0 : 10;
@@ -298,17 +285,6 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       parts.push('<path d="M' + ax + ',' + ay + 'L' + bx + ',' + by +
         '" stroke="' + COL_EDGE + '" stroke-width="3.2" fill="none" stroke-linecap="round"/>');
     }
-    // official boundary (塘尾道)
-    if (document.getElementById('t-official').checked && view.k > 0.5) {
-      for (const r of tongmi) {
-        const d = r.pts.map((p, j) => {
-          const [sx, sy] = toScr(p[0], p[1]);
-          return (j ? 'L' : 'M') + sx + ',' + sy;
-        }).join('');
-        parts.push('<path d="' + d + '" stroke="' + COL_OFF + '" stroke-width="2.6" ' +
-          'fill="none" stroke-dasharray="7,5" opacity="0.9"/>');
-      }
-    }
     // pair seed rings — screen coords
     for (const [idx, col] of [[pairA, COL_A], [pairB, COL_B]]) {
       const [sx, sy] = toScr(seeds[idx].x, seeds[idx].y);
@@ -354,12 +330,8 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     const out = document.getElementById('pairout');
     const an = zh(seeds[pairA]), bn = zh(seeds[pairB]);
     if (edge) {
-      const mx = (edge[0][0] + edge[1][0]) / 2, my = (edge[0][1] + edge[1][1]) / 2;
-      let best = Infinity;
-      for (const [a, b] of tongmiSegs) best = Math.min(best, segDist(mx, my, a[0], a[1], b[0], b[1]));
-      const m = Math.round(best / S);
       out.innerHTML = '<b>' + an + ' ↔ ' + bn + '</b> 共享 Voronoi 分界<br>' +
-        '與官方塘尾道相距：<b>' + m + ' m</b><br><span class="hint">拖曳種子即可移動分界</span>';
+        '<span class="hint">拖曳種子即可移動分界</span>';
     } else {
       out.innerHTML = '<b>' + an + ' ↔ ' + bn + '</b><br><span class="off">兩格唔相鄰（冇共享分界）</span>';
     }
@@ -498,7 +470,6 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     document.getElementById('t-cells').checked = true;
     document.getElementById('t-labels').checked = true;
     document.getElementById('t-roads').checked = true;
-    document.getElementById('t-official').checked = true;
     // restore curated positions for draggable seeds
     D.places.forEach((p, i) => { p.x = ORIG.places[i].x; p.y = ORIG.places[i].y; });
     setSeeds(D.places);
