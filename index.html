@@ -257,10 +257,10 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       ctx.strokeStyle = hl ? '#2c2c2c' : 'rgba(255,255,255,0.85)';
       ctx.stroke();
     }
-    ctx.drawImage(gWater.canvas, 0, 0, W, H);
-    // strokes: screen-constant width in map space
+    // strokes + water in map space (screen-constant stroke widths)
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k,
       dpr * (W / 2 - view.cx * view.k), dpr * (H / 2 - view.cy * view.k));
+    ctx.drawImage(gWater.canvas, 0, 0, W, H);
     if (document.getElementById('t-roads').checked) {
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.strokeStyle = ROAD_HWY; ctx.lineWidth = 2.2 / view.k; ctx.stroke(roadHwy);
