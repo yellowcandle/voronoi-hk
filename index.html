@@ -157,9 +157,13 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
 
   const gLand = makeStatic();      // mainland land
   gLand.fillStyle = LAND; gLand.fillRect(0, 0, W, H);
-  const gWater = makeStatic();     // sea masks, then islands repainted over them
-  for (const s of D.sea) drawPoly(gWater, s, WATER, null);
-  for (const isl of D.islands) drawPoly(gWater, isl, LAND, null);
+  const gWater = makeStatic();     // sea mask with islands cut out as true holes (evenodd),
+  // so islands stay transparent and let the Voronoi cell colors drawn under this layer show through
+  gWater.beginPath();
+  for (const s of D.sea) s.forEach((p, j) => j ? gWater.lineTo(p[0], p[1]) : gWater.moveTo(p[0], p[1]));
+  for (const isl of D.islands) isl.forEach((p, j) => j ? gWater.lineTo(p[0], p[1]) : gWater.moveTo(p[0], p[1]));
+  gWater.fillStyle = WATER;
+  gWater.fill('evenodd');
   // strokes drawn dynamically with screen-constant width (zoom-friendly)
   const pathFrom = (list) => {
     const p = new Path2D();
