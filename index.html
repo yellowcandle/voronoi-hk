@@ -286,23 +286,23 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
 
   function renderSvg() {
     const parts = [];
-    const group = '<g transform="translate(' + W / 2 + ',' + H / 2 + ') scale(' + view.k + ') translate(' + (-view.cx) + ',' + (-view.cy) + ')">';
 
-    // boundary edge (A<->B) — map coords, in scaled group, constant screen width
+    // boundary edge (A<->B) — screen coords, constant screen width
     const edge = sharedEdge(pairA, pairB);
     if (edge) {
-      const lw = 3.2 / view.k;
-      parts.push('<path d="M' + edge[0][0] + ',' + edge[0][1] + 'L' + edge[1][0] + ',' + edge[1][1] +
-        '" stroke="' + COL_EDGE + '" stroke-width="' + lw + '" fill="none" stroke-linecap="round"/>');
+      const [ax, ay] = toScr(edge[0][0], edge[0][1]), [bx, by] = toScr(edge[1][0], edge[1][1]);
+      parts.push('<path d="M' + ax + ',' + ay + 'L' + bx + ',' + by +
+        '" stroke="' + COL_EDGE + '" stroke-width="3.2" fill="none" stroke-linecap="round"/>');
     }
     // official boundary (塘尾道)
     if (document.getElementById('t-official').checked && view.k > 0.5) {
-      const lw = 2.6 / view.k;
-      const dash = (7 / view.k) + ',' + (5 / view.k);
       for (const r of tongmi) {
-        const d = r.pts.map((p, j) => (j ? 'L' : 'M') + p[0] + ',' + p[1]).join('');
-        parts.push('<path d="' + d + '" stroke="' + COL_OFF + '" stroke-width="' + lw +
-          '" fill="none" stroke-dasharray="' + dash + '" opacity="0.9"/>');
+        const d = r.pts.map((p, j) => {
+          const [sx, sy] = toScr(p[0], p[1]);
+          return (j ? 'L' : 'M') + sx + ',' + sy;
+        }).join('');
+        parts.push('<path d="' + d + '" stroke="' + COL_OFF + '" stroke-width="2.6" ' +
+          'fill="none" stroke-dasharray="7,5" opacity="0.9"/>');
       }
     }
     // pair seed rings — screen coords
@@ -339,7 +339,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       if (en(s)) parts.push('<text x="' + sx + '" y="' + (py0 + 24) + '" text-anchor="middle" font-size="9" fill="#8a8a8a">' + en(s) + '</text>');
     }
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-    svg.innerHTML = group + parts.join('') + '</g>';
+    svg.innerHTML = parts.join('');
     svg._seeds = svg.querySelectorAll('circle[data-i]');
   }
   const drawSvg = renderSvg; // alias kept for render() call
