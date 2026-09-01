@@ -131,11 +131,18 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   let mode = 'places';
   let seeds = D.places;
   let delaunay = null, voronoi = null;
+  let cellPolys = null;                    // cache of voronoi.cellPolygon(i) per level
   let hovered = -1;
   let view = { cx: 800, cy: 568, k: 0.97 };
   const KMIN = 0.2, KMAX = 16;
   let pairA = null, pairB = null; // seed indices
   const ORIG = { places: D.places.map(p => ({ x: p.x, y: p.y })), stations: D.stations.map(s => ({ x: s.x, y: s.y })) };
+
+  // Viewport in map coords (the visible rectangle), padded for culling.
+  function viewBounds(pad) {
+    const hw = W / 2 / view.k, hh = H / 2 / view.k;
+    return { x0: view.cx - hw - pad, x1: view.cx + hw + pad, y0: view.cy - hh - pad, y1: view.cy + hh + pad };
+  }
 
   // ---- static layers (land / sea+roads) ----
   const makeStatic = () => {
@@ -202,6 +209,9 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     seeds = list;
     delaunay = d3.Delaunay.from(seeds.map(s => [s.x, s.y]));
     voronoi = delaunay.voronoi([0, 0, W, H]);
+    // cache cell polygons in map coords (fixed per level); only the view
+    // transform changes each frame, so we never recompute them while panning.
+    cellPolys = seeds.map((_, i) => voronoi.cellPolygon(i));
     if (resetPair !== false) setPairDefaults();
   }
   // For the places mode, swap to the tier subset matching the current zoom.
@@ -246,7 +256,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
 
   // ---- shared edge ----
   function sharedEdge(i, j) {
-    const pa = voronoi.cellPolygon(i), pb = voronoi.cellPolygon(j);
+    const pa = cellPolys[i], pb = cellPolys[j];
     if (!pa || !pb) return null;
     const set = new Set();
     for (const p of pa) set.add(p[0].toFixed(2) + ',' + p[1].toFixed(2));
@@ -256,8 +266,16 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     return [common[0], common[1]];
   }
   // ---- render ----
-  function draw() { render(); }
+  // Coalesce draw() calls to one render per animation frame: pan/hover fire
+  // `draw()` on every pointermove, often several times before the browser
+  // paints. Rendering synchronously on each wastes work on frames never shown.
   const PAL_OFF = mode === 'places' ? 0 : 10;
+  let _rafPending = false;
+  function draw() {
+    if (_rafPending) return;
+    _rafPending = true;
+    requestAnimationFrame(() => { _rafPending = false; render(); });
+  }
 
   function render() {
     // pick the LOD level for the current zoom before drawing (places mode)
@@ -269,11 +287,16 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k,
       dpr * (W / 2 - view.cx * view.k), dpr * (H / 2 - view.cy * view.k));
     ctx.drawImage(gLand.canvas, 0, 0, W, H);
-    // cells in screen space (crisp at any zoom)
+    // cells in screen space (crisp at any zoom), using the cached polygons and
+    // culling cells whose seed is well off-screen — this skips the ~3655
+    // off-screen polys at deep zoom and keeps pan/zoom cheap.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const vb = viewBounds(0);
     for (let i = 0; i < seeds.length; i++) {
-      const poly = voronoi.cellPolygon(i);
+      const poly = cellPolys[i];
       if (!poly) continue;
+      const s = seeds[i];
+      if (s.x < vb.x0 || s.x > vb.x1 || s.y < vb.y0 || s.y > vb.y1) continue;
       const hl = i === hovered;
       ctx.fillStyle = 'hsl(' + hue(i) + ',42%,' + (hl ? 92 : 82) + '%)';
       ctx.beginPath();
@@ -330,7 +353,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       parts.push('<circle cx="' + sx + '" cy="' + sy + '" r="' + Math.max(5, 6.5) +
         '" fill="none" stroke="' + col + '" stroke-width="3" opacity="0.95"/>');
     }
-    // seeds + labels
+    // seeds + labels (cached polygons; seed culled by screen position)
     const placed = [];
     const showLabels = document.getElementById('t-labels').checked;
     for (let i = 0; i < seeds.length; i++) {
@@ -341,7 +364,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       const fill = i === pairA ? COL_A : i === pairB ? COL_B : 'hsl(' + hue(i) + ',40%,38%)';
       parts.push('<circle cx="' + sx + '" cy="' + sy + '" r="' + r + '" fill="' + fill + '" opacity="0.92" data-i="' + i + '"/>');
       if (!showLabels) continue;
-      const poly = voronoi.cellPolygon(i);
+      const poly = cellPolys[i];
       const major = s.m || mode === 'stations';
       if (!major && (!poly || polyScreenArea(poly) < 550)) continue;
       const nm = zh(s);
