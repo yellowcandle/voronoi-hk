@@ -5,3 +5,7 @@ data.json
 template.html
 preprocess.py
 .gstack/
+csdi_places.geojson
+csdi_placename_table.geojson
+hk_boundary.json
+__pycache__/
