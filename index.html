@@ -208,6 +208,102 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   const roadKey = pathFrom(D.keystreets);
   const coastPath = pathFrom(D.coast.concat(D.islands));
 
+  // ---- road/coast raster cache ----
+  // Roads and the coastline are fixed in map space but stroked with
+  // screen-constant widths, so they were re-stroked from scratch on every
+  // frame: a Firefox profile puts 16ms of a 35ms frame in these four stroke
+  // calls (12.2ms for the 11,636 road polylines, 3.9ms for the coast), and a
+  // frame runs on every hover move. They only change with the zoom, so
+  // rasterise them into an offscreen canvas covering the viewport plus a
+  // margin, and blit that for as long as the zoom holds still — which is every
+  // pan, hover, tier switch and pair change.
+  //
+  // The raster is built at exactly view.k * DPR and blitted 1:1 on a whole
+  // device pixel rather than at some quantised zoom "bucket" scaled to fit:
+  // the stroke widths are screen-constant, so a bucket's raster is only the
+  // right weight at one zoom anyway, and scaling it would resample lines a
+  // pixel wide. A wheel notch changes the zoom by 21%, wider than any bucket
+  // worth having, so a zoom gets the old direct strokes and the raster is
+  // rebuilt on the first frame after the scale settles. The one cost is that
+  // roads sit up to half a device pixel off the vector layers while panning.
+  const LINE_PAD = DPR > 2 ? 40 : 120;     // screen px of margin kept for panning
+  const lineLayer = { canvas: document.createElement('canvas'), k: 0, roads: null, x0: 0, y0: 0, w: 0, h: 0 };
+  let lastFrameK = 0;                      // view.k on the previous frame
+  // Bounding box of everything strokeLines draws — the coast and some roads run
+  // a little past the nominal map rect, so this is not [0,W]x[0,H].
+  const LINE_BOX = (() => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const list of [D.roads, D.keystreets, D.coast, D.islands])
+      for (const r of list) for (const p of (r.pts || r)) {
+        if (p[0] < x0) x0 = p[0];
+        if (p[0] > x1) x1 = p[0];
+        if (p[1] < y0) y0 = p[1];
+        if (p[1] > y1) y1 = p[1];
+      }
+    return { x0, y0, x1, y1 };
+  })();
+  // Map-space rect the raster has to cover: the padded viewport, clipped to the
+  // drawn geometry (nothing outside it to draw, and the clip is what bounds the
+  // zoomed-out raster) plus room for the half-width of a stroke on the edge.
+  function lineRect(pad) {
+    const b = viewBounds(pad / view.k), m = 4 / view.k;
+    return { x0: Math.max(LINE_BOX.x0 - m, b.x0), y0: Math.max(LINE_BOX.y0 - m, b.y0),
+             x1: Math.min(LINE_BOX.x1 + m, b.x1), y1: Math.min(LINE_BOX.y1 + m, b.y1) };
+  }
+  function strokeLines(g, k, roads) {
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    if (roads) {
+      g.strokeStyle = ROAD_HWY; g.lineWidth = 2.2 / k; g.stroke(roadHwy);
+      g.strokeStyle = ROAD_PRY; g.lineWidth = 1.5 / k; g.stroke(roadPry);
+      g.strokeStyle = ROAD_KEY; g.lineWidth = 0.9 / k; g.stroke(roadKey);
+    }
+    g.strokeStyle = COAST; g.lineWidth = 1.4 / k; g.stroke(coastPath);
+  }
+  function buildLineLayer(roads) {
+    const L = lineLayer, r = lineRect(LINE_PAD), sc = view.k * DPR;
+    const px = Math.ceil((r.x1 - r.x0) * sc), py = Math.ceil((r.y1 - r.y0) * sc);
+    const g = L.canvas.getContext('2d');
+    if (L.canvas.width !== px || L.canvas.height !== py) {
+      L.canvas.width = px; L.canvas.height = py;         // resizing also clears
+    } else {
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, px, py);  // reuse the allocation
+    }
+    g.setTransform(sc, 0, 0, sc, -r.x0 * sc, -r.y0 * sc);
+    strokeLines(g, view.k, roads);
+    // sizes from the rounded-up pixel counts, so map coords and raster pixels
+    // stay in step
+    L.k = view.k; L.roads = roads; L.x0 = r.x0; L.y0 = r.y0; L.w = px / sc; L.h = py / sc;
+  }
+  function drawLines(roads) {
+    const need = lineRect(0), L = lineLayer;
+    if (need.x1 <= need.x0 || need.y1 <= need.y0) return;          // map off-screen
+    const hit = L.k === view.k && L.roads === roads &&
+      need.x0 >= L.x0 && need.y0 >= L.y0 && need.x1 <= L.x0 + L.w && need.y1 <= L.y0 + L.h;
+    if (!hit) {
+      // Rasterising mid-zoom would only be thrown away on the next frame, so
+      // stroke straight to the canvas until the scale holds still for a frame.
+      if (view.k !== lastFrameK) {
+        ctx.setTransform(DPR * view.k, 0, 0, DPR * view.k,
+          DPR * (W / 2 - view.cx * view.k), DPR * (H / 2 - view.cy * view.k));
+        strokeLines(ctx, view.k, roads);
+        L.k = 0;                                                   // cache is stale
+        lastFrameK = view.k;
+        return;
+      }
+      buildLineLayer(roads);
+    }
+    // Device pixels, 1:1, whole-pixel offset, visible part only — the blit has
+    // to stay unscaled to be worth doing at all (see above).
+    const ox = Math.round(((L.x0 - view.cx) * view.k + W / 2) * DPR);
+    const oy = Math.round(((L.y0 - view.cy) * view.k + H / 2) * DPR);
+    const sx = Math.max(0, -ox), sy = Math.max(0, -oy);
+    const sw = Math.min(L.canvas.width - sx, canvas.width - Math.max(0, ox));
+    const sh = Math.min(L.canvas.height - sy, canvas.height - Math.max(0, oy));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (sw > 0 && sh > 0) ctx.drawImage(L.canvas, sx, sy, sw, sh, sx + ox, sy + oy, sw, sh);
+    lastFrameK = view.k;
+  }
+
   // ---- seeds / delaunay: zoom-tiered level of detail + source filter ----
   // Places carry a `t` 0..3 hierarchy (0=anchors → 3=fine detail, set from the
   // merged CSDI PLACE_TYPE / OSM place=* type in preprocess.py). At any zoom we
@@ -412,13 +508,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k,
       dpr * (W / 2 - view.cx * view.k), dpr * (H / 2 - view.cy * view.k));
     ctx.drawImage(gWater.canvas, 0, 0, W, H);
-    if (document.getElementById('t-roads').checked) {
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.strokeStyle = ROAD_HWY; ctx.lineWidth = 2.2 / view.k; ctx.stroke(roadHwy);
-      ctx.strokeStyle = ROAD_PRY; ctx.lineWidth = 1.5 / view.k; ctx.stroke(roadPry);
-      ctx.strokeStyle = ROAD_KEY; ctx.lineWidth = 0.9 / view.k; ctx.stroke(roadKey);
-    }
-    ctx.strokeStyle = COAST; ctx.lineWidth = 1.4 / view.k; ctx.stroke(coastPath);
+    drawLines(document.getElementById('t-roads').checked);
     drawSvg();
     updateReadouts();
   }
