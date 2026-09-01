@@ -132,6 +132,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   let seeds = D.places;
   let delaunay = null, voronoi = null;
   let hovered = -1;
+  let polys = null, polyBounds = null; // cached cell polygons + map-space bounds; rebuilt when seeds change
   let view = { cx: 800, cy: 568, k: 0.97 };
   const KMIN = 0.2, KMAX = 16;
   let pairA = null, pairB = null; // seed indices
@@ -181,6 +182,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     seeds = list;
     delaunay = d3.Delaunay.from(seeds.map(s => [s.x, s.y]));
     voronoi = delaunay.voronoi([0, 0, W, H]);
+    polys = null; polyBounds = null;
     if (resetPair !== false) setPairDefaults();
   }
   function zh(s) { return s.n.split(' ')[0]; }
@@ -209,7 +211,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
 
   // ---- shared edge ----
   function sharedEdge(i, j) {
-    const pa = voronoi.cellPolygon(i), pb = voronoi.cellPolygon(j);
+    const pa = polys ? polys[i] : voronoi.cellPolygon(i), pb = polys ? polys[j] : voronoi.cellPolygon(j);
     if (!pa || !pb) return null;
     const set = new Set();
     for (const p of pa) set.add(p[0].toFixed(2) + ',' + p[1].toFixed(2));
@@ -219,7 +221,11 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     return [common[0], common[1]];
   }
   // ---- render ----
-  function draw() { render(); }
+  let rafId = 0;
+  function draw() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => { rafId = 0; render(); });
+  }
   const PAL_OFF = mode === 'places' ? 0 : 10;
 
   function render() {
@@ -232,9 +238,26 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     ctx.drawImage(gLand.canvas, 0, 0, W, H);
     // cells in screen space (crisp at any zoom)
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!polys) {
+      polys = []; polyBounds = [];
+      for (let i = 0; i < seeds.length; i++) {
+        const poly = voronoi.cellPolygon(i);
+        polys[i] = poly;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        if (poly) for (const p of poly) {
+          if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+          if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+        }
+        polyBounds[i] = [x0, x1, y0, y1];
+      }
+    }
     for (let i = 0; i < seeds.length; i++) {
-      const poly = voronoi.cellPolygon(i);
+      const poly = polys[i];
       if (!poly) continue;
+      const b = polyBounds[i];
+      const bx0 = (b[0] - view.cx) * view.k + W / 2, by0 = (b[1] - view.cy) * view.k + H / 2;
+      const bx1 = (b[2] - view.cx) * view.k + W / 2, by1 = (b[3] - view.cy) * view.k + H / 2;
+      if (bx1 < 0 || bx0 > W || by1 < 0 || by0 > H) continue; // offscreen
       const hl = i === hovered;
       ctx.fillStyle = 'hsl(' + hue(i) + ',42%,' + (hl ? 92 : 82) + '%)';
       ctx.beginPath();
@@ -302,7 +325,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
       const fill = i === pairA ? COL_A : i === pairB ? COL_B : 'hsl(' + hue(i) + ',40%,38%)';
       parts.push('<circle cx="' + sx + '" cy="' + sy + '" r="' + r + '" fill="' + fill + '" opacity="0.92" data-i="' + i + '"/>');
       if (!showLabels) continue;
-      const poly = voronoi.cellPolygon(i);
+      const poly = polys[i];
       const major = s.m || mode === 'stations';
       if (!major && (!poly || polyScreenArea(poly) < 550)) continue;
       const nm = zh(s);
