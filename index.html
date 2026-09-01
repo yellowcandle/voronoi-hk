@@ -144,6 +144,25 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   let pairA = null, pairB = null; // seed indices
   const ORIG = { places: D.places.map(p => ({ x: p.x, y: p.y })), stations: D.stations.map(s => ({ x: s.x, y: s.y })) };
 
+  // The Delaunay/Voronoi/cellPolygon set depends only on the point list, which
+  // is fixed per (level, source) subset. Memoize the geometry per subset key so
+  // re-selecting an already-built subset (zoom crossing, source toggle, reset)
+  // never re-runs the triangulation; a drag mutates seeds in place and
+  // invalidates the cache.
+  let geoCache = Object.create(null);      // key -> { delaunay, voronoi, cellPolys }
+  function buildGeo(list) {
+    const del = d3.Delaunay.from(list.map(s => [s.x, s.y]));
+    const vor = del.voronoi([0, 0, W, H]);
+    const polys = list.map((_, i) => vor.cellPolygon(i));
+    return { delaunay: del, voronoi: vor, cellPolys: polys };
+  }
+  // Identity of a subset: level + source (places) or a unique tag (stations).
+  function applyGeo(key, list) {
+    let g = geoCache[key];
+    if (!g) { g = buildGeo(list); geoCache[key] = g; }
+    seeds = list; delaunay = g.delaunay; voronoi = g.voronoi; cellPolys = g.cellPolys;
+  }
+
   // Viewport in map coords (the visible rectangle), padded for culling.
   function viewBounds(pad) {
     const hw = W / 2 / view.k, hh = H / 2 / view.k;
@@ -223,14 +242,15 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   }
 
   function setSeeds(list, resetPair) {
-    seeds = list;
-    delaunay = d3.Delaunay.from(seeds.map(s => [s.x, s.y]));
-    voronoi = delaunay.voronoi([0, 0, W, H]);
-    // cache cell polygons in map coords (fixed per level); only the view
-    // transform changes each frame, so we never recompute them while panning.
-    cellPolys = seeds.map((_, i) => voronoi.cellPolygon(i));
+    // Rebuild (un-cached) geometry — used by mode switch to stations and the
+    // drag path where points genuinely change. Places subsets go through
+    // setLevel/applySrc which use the memoized applyGeo.
+    const g = buildGeo(list);
+    seeds = list; delaunay = g.delaunay; voronoi = g.voronoi; cellPolys = g.cellPolys;
     if (resetPair !== false) setPairDefaults();
   }
+  // Bump every cached subset (a dragged seed changed points in place).
+  function invalidateGeo() { geoCache = Object.create(null); }
   // For the places mode, swap to the tier subset matching the current zoom.
   // Pair indices are subset-local; capture their names before the swap so the
   // selected pair survives a level change (fall back to defaults if absent).
@@ -240,7 +260,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     if (L === actLevel && seeds.length === idx.length) return;
     actLevel = L;
     const names = [pairA, pairB].map(p => (seeds[p] ? zh(seeds[p]) : ''));
-    setSeeds(idx.map(i => ALL_PLACES[i]), false);
+    applyGeo(L + '|' + srcSel, idx.map(i => ALL_PLACES[i]));
     const nA = seeds.findIndex(s => zh(s) === names[0]);
     const nB = seeds.findIndex(s => zh(s) === names[1]);
     pairA = nA >= 0 ? nA : 0;
@@ -529,6 +549,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     const [sx, sy] = norm(e);
     const [mx, my] = toMap(sx, sy);
     seeds[dragging].x = mx; seeds[dragging].y = my;
+    invalidateGeo();                        // a seed moved; cached polys are stale
     setSeeds(seeds, false);
     draw();
   });
@@ -539,7 +560,12 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
   evt(document, 'change', (e) => {
     if (e.target.name === 'mode') {
       mode = e.target.value;
-      setSeeds(mode === 'places' ? D.places : D.stations);
+      if (mode === 'places') {
+        applyGeo('P|0|0', D.places);        // full set; setLevel re-subsets after
+      } else {
+        applyGeo('S', D.stations);
+      }
+      setPairDefaults();
       draw();
     } else if (e.target.name === 'src') {
       srcSel = e.target.value;
@@ -568,6 +594,7 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     document.getElementById('t-roads').checked = true;
     // restore curated positions for draggable seeds
     D.places.forEach((p, i) => { p.x = ORIG.places[i].x; p.y = ORIG.places[i].y; });
+    invalidateGeo();                        // seeds changed in place
     setSeeds(D.places);
     view.cx = W / 2; view.cy = H / 2; view.k = 0.97;
     draw();
