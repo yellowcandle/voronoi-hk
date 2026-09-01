@@ -288,15 +288,64 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     pairB = idx[1] >= 0 ? idx[1] : Math.min(1, seeds.length - 1);
     fillPairSelects();
   }
+  // Rebuilding the two pair <select>s used to be by far the most expensive DOM
+  // work on the page. At the finest tier each list holds 3655 <option>s, and
+  // emptying a select that is *in the document* tears down a frame and an
+  // accessible per option — with the a11y engine running that walk is
+  // superlinear: a profile of a zoom that crossed a tier boundary caught a
+  // single `sa.innerHTML = ''` blocking the main thread for 13.3s (input
+  // backlog peaked at 21s, 82k DocAccessible::ContentRemovedNode events).
+  // Two rules keep it off the hot path:
+  //   1. a closed select only ever displays its selected option, so that is
+  //      all we build; the full list is materialised on demand the first time
+  //      the user reaches for the control (see `ensurePairLists`).
+  //   2. never bulk-remove the children of an in-document select. Dropping a
+  //      list swaps in a detached clone (one subtree removal for layout/a11y);
+  //      building one appends a fragment to an all-but-empty select.
+  let pairListed = false;                  // are the full option lists built?
+  let restoringFocus = false;              // suppress the lazy-fill trigger
+  function pairOption(i) {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = zh(seeds[i]);
+    return o;
+  }
+  // Collapse both selects to their current selection (cheap; safe per frame).
   function fillPairSelects() {
-    const sa = document.getElementById('pairA'), sb = document.getElementById('pairB');
-    sa.innerHTML = ''; sb.innerHTML = '';
-    seeds.forEach((s, i) => {
-      const o1 = document.createElement('option'); o1.value = i; o1.textContent = zh(s);
-      const o2 = document.createElement('option'); o2.value = i; o2.textContent = zh(s);
-      sa.appendChild(o1); sb.appendChild(o2);
-    });
-    sa.value = pairA; sb.value = pairB;
+    pairListed = false;
+    collapseSelect('pairA', pairA);
+    collapseSelect('pairB', pairB);
+  }
+  function collapseSelect(id, idx) {
+    const old = document.getElementById(id);
+    if (old.options.length <= 1) {         // already collapsed: relabel in place
+      const o = old.options[0] || old.appendChild(document.createElement('option'));
+      if (!seeds[idx]) { old.replaceChildren(); return; }
+      o.value = idx; o.textContent = zh(seeds[idx]); old.value = idx;
+      return;
+    }
+    const focused = document.activeElement === old;
+    const next = old.cloneNode(false);      // same id/attrs, no options
+    if (seeds[idx]) next.appendChild(pairOption(idx));
+    old.replaceWith(next);                  // one subtree removal, not 3655
+    next.value = idx;
+    // Handing focus back must not look like the user reaching for the list,
+    // or every tier crossing while the control has focus rebuilds it again.
+    if (focused) { restoringFocus = true; next.focus(); restoringFocus = false; }
+  }
+  // Build the full option lists (keeps node identity so a click that opens the
+  // dropdown still opens it) — only ever called from a user gesture.
+  function ensurePairLists() {
+    if (pairListed) return;
+    pairListed = true;
+    listSelect('pairA', pairA);
+    listSelect('pairB', pairB);
+  }
+  function listSelect(id, idx) {
+    const sel = document.getElementById(id);
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < seeds.length; i++) frag.appendChild(pairOption(i));
+    sel.replaceChildren(frag);              // removes only the collapsed stub
+    sel.value = idx;
   }
 
   // ---- coordinates ----
@@ -574,6 +623,16 @@ const DATA = {"W": 1600, "H": 1136.1, "scale": 0.023194628774526112, "roads": [{
     else if (e.target.id === 'pairB') { pairB = +e.target.value; draw(); }
     else draw();
   });
+  // Fill the pair lists lazily: pointerdown runs before the dropdown opens,
+  // focusin covers keyboard access. Delegated, because collapseSelect may have
+  // replaced the element since load.
+  const wantPairList = (e) => {
+    if (restoringFocus) return;
+    if (e.target.id === 'pairA' || e.target.id === 'pairB') ensurePairLists();
+  };
+  evt(document, 'pointerdown', wantPairList);
+  evt(document, 'focusin', wantPairList);
+  evt(document, 'keydown', wantPairList);
   const flyPair = () => {
     const a = seeds[pairA], b = seeds[pairB];
     view.cx = (a.x + b.x) / 2; view.cy = (a.y + b.y) / 2;
